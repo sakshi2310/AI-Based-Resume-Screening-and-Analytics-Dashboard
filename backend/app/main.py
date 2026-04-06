@@ -2,13 +2,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
-from app.core.config import get_settings
+from app.core.config import get_settings, get_upload_dir
 from app.db.mongodb import close_mongo_connection, connect_to_mongo
 from app.db.seed import ensure_indexes, seed_demo_admin
 
 settings = get_settings()
+upload_dir = get_upload_dir()
+upload_dir.mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
@@ -37,6 +40,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
+app.mount("/uploads/resumes", StaticFiles(directory=str(upload_dir)), name="uploaded-resumes")
 
 
 @app.get("/")

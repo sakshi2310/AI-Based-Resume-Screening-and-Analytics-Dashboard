@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,6 +13,8 @@ class Settings(BaseSettings):
     mongodb_uri: str = "mongodb://127.0.0.1:27017"
     mongodb_db_name: str = "resume_ai"
     frontend_origin: str = "http://localhost:5173"
+    upload_dir: str = "uploads/resumes"
+    max_resume_upload_size_mb: int = 10
     demo_admin_email: str = "admin@resumeai.local"
     demo_admin_password: str = "Admin@123"
 
@@ -21,3 +24,8 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def get_upload_dir() -> Path:
+    settings = get_settings()
+    return Path(settings.upload_dir).resolve()

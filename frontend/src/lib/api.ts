@@ -59,7 +59,22 @@ export interface JobPayload {
   is_active: boolean;
 }
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8001/api/v1').replace(/\/$/, '');
+export interface ResumeRecord {
+  id: string;
+  original_filename: string;
+  stored_filename: string;
+  file_url: string;
+  file_size_bytes: number;
+  mime_type: string;
+  job_id: string | null;
+  job_title: string | null;
+  uploaded_by: string;
+  uploaded_at: string;
+}
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');
+const API_ORIGIN = API_BASE_URL.replace(/\/api\/v1$/, '');
+const REQUEST_TIMEOUT_MS = 15000;
 
 function extractErrorMessage(detail: unknown): string {
   if (typeof detail === 'string' && detail.trim()) {
@@ -100,14 +115,28 @@ function extractErrorMessage(detail: unknown): string {
 }
 
 async function apiRequest<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init.headers || {}),
-    },
-  });
+  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData;
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
+        ...(init.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Request timed out. Please ensure backend is running on the configured API URL.');
+    }
+    throw new Error('Unable to reach backend API. Please check backend server and API base URL.');
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     let message = 'Request failed';
@@ -192,4 +221,33 @@ export async function deleteJob(token: string, jobId: string): Promise<void> {
   await apiRequest<void>(`/jobs/${jobId}`, {
     method: 'DELETE',
   }, token);
+}
+
+export async function getResumes(token: string): Promise<ResumeRecord[]> {
+  return apiRequest<ResumeRecord[]>('/resumes', {}, token);
+}
+
+export async function uploadResumes(token: string, files: File[], jobId?: string): Promise<ResumeRecord[]> {
+  const formData = new FormData();
+  files.forEach((file) => formData.append('files', file));
+  if (jobId) {
+    formData.append('job_id', jobId);
+  }
+
+  return apiRequest<ResumeRecord[]>(
+    '/resumes/upload',
+    {
+      method: 'POST',
+      body: formData,
+    },
+    token,
+  );
+}
+
+export async function deleteResume(token: string, resumeId: string): Promise<void> {
+  await apiRequest<void>(`/resumes/${resumeId}`, { method: 'DELETE' }, token);
+}
+
+export function buildResumeUrl(filePath: string): string {
+  return `${API_ORIGIN}${filePath}`;
 }

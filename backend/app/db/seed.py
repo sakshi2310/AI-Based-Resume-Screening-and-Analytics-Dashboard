@@ -10,6 +10,8 @@ async def ensure_indexes() -> None:
     await db.users.create_index("email", unique=True)
     await db.jobs.create_index([("created_at", -1)])
     await db.jobs.create_index([("is_active", -1), ("created_at", -1)])
+    await db.resumes.create_index([("uploaded_at", -1)])
+    await db.resumes.create_index([("job_id", 1), ("uploaded_at", -1)])
 
 
 async def seed_demo_admin() -> None:

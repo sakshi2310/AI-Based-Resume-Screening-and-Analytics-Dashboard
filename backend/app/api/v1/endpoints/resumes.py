@@ -10,6 +10,7 @@ from app.api.deps import get_current_staff, get_current_user
 from app.core.config import get_settings, get_upload_dir
 from app.db.mongodb import get_database
 from app.schemas.resume import ResumePublic
+from app.services.resume_parser import parse_resume
 
 router = APIRouter()
 
@@ -41,6 +42,9 @@ def serialize_resume(document: dict) -> dict:
         "job_title": document.get("job_title"),
         "uploaded_by": document["uploaded_by"],
         "uploaded_at": document["uploaded_at"],
+        "parse_status": document.get("parse_status", "pending"),
+        "parse_error": document.get("parse_error"),
+        "parsed_data": document.get("parsed_data"),
     }
 
 
@@ -124,6 +128,15 @@ async def upload_resumes(
 
         destination_path.write_bytes(content)
 
+        parse_status = "success"
+        parse_error: str | None = None
+        parsed_data: dict | None = None
+        try:
+            parsed_data = parse_resume(content, extension)
+        except Exception as exc:
+            parse_status = "failed"
+            parse_error = str(exc)
+
         document = {
             "original_filename": safe_original_name,
             "stored_filename": stored_filename,
@@ -134,6 +147,9 @@ async def upload_resumes(
             "uploaded_by": current_user["full_name"],
             "uploader_id": ObjectId(current_user["id"]),
             "uploaded_at": now,
+            "parse_status": parse_status,
+            "parse_error": parse_error,
+            "parsed_data": parsed_data,
         }
 
         result = await db.resumes.insert_one(document)

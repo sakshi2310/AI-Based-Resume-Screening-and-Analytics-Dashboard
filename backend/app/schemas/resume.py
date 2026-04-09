@@ -3,6 +3,18 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class ParsedResumeData(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    location: str | None = None
+    skills: list[str] = Field(default_factory=list)
+    education: list[str] = Field(default_factory=list)
+    experience_years: float | None = None
+    summary: str | None = None
+    raw_text_excerpt: str | None = None
+
+
 class ResumePublic(BaseModel):
     id: str
     original_filename: str
@@ -14,5 +26,8 @@ class ResumePublic(BaseModel):
     job_title: str | None = None
     uploaded_by: str
     uploaded_at: datetime
+    parse_status: str = "pending"
+    parse_error: str | None = None
+    parsed_data: ParsedResumeData | None = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -70,6 +70,19 @@ export interface ResumeRecord {
   job_title: string | null;
   uploaded_by: string;
   uploaded_at: string;
+  parse_status: "success" | "failed" | "pending";
+  parse_error: string | null;
+  parsed_data: {
+    name: string | null;
+    email: string | null;
+    phone: string | null;
+    location: string | null;
+    skills: string[];
+    education: string[];
+    experience_years: number | null;
+    summary: string | null;
+    raw_text_excerpt: string | null;
+  } | null;
 }
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1').replace(/\/$/, '');

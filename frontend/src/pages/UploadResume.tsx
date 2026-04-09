@@ -225,7 +225,29 @@ const UploadResume = () => {
                     <div className="flex flex-wrap gap-2">
                       <Badge variant="secondary">{resume.mime_type}</Badge>
                       <Badge variant="outline">{resume.job_title || "No job mapped"}</Badge>
+                      <Badge
+                        variant={resume.parse_status === "success" ? "secondary" : resume.parse_status === "failed" ? "destructive" : "outline"}
+                      >
+                        Parse: {resume.parse_status}
+                      </Badge>
                     </div>
+                    {resume.parse_status === "failed" && resume.parse_error && (
+                      <p className="text-xs text-red-500">Parse failed: {resume.parse_error}</p>
+                    )}
+                    {resume.parse_status === "success" && resume.parsed_data && (
+                      <div className="text-xs text-muted-foreground space-y-1 pt-1">
+                        <p>Name: {resume.parsed_data.name || "N/A"}</p>
+                        <p>Email: {resume.parsed_data.email || "N/A"}</p>
+                        <p>Phone: {resume.parsed_data.phone || "N/A"}</p>
+                        <p>Location: {resume.parsed_data.location || "N/A"}</p>
+                        <p>
+                          Experience:
+                          {" "}
+                          {resume.parsed_data.experience_years !== null ? `${resume.parsed_data.experience_years} years` : "N/A"}
+                        </p>
+                        <p>Skills: {resume.parsed_data.skills.length > 0 ? resume.parsed_data.skills.join(", ") : "N/A"}</p>
+                      </div>
+                    )}
                   </div>
                   <div className="flex gap-2">
                     <Button asChild variant="outline" size="sm">

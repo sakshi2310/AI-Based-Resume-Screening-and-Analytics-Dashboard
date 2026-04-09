@@ -36,9 +36,15 @@ npm run dev
 
 - Backend root: `http://localhost:8000/`
 - API health: `http://localhost:8000/api/v1/health`
-- Frontend: `http://localhost:5173`
+- Frontend: `http://localhost:8080`
 
 When everything is running, the dashboard should display the API health response.
+
+## Troubleshooting
+
+- `ERR_CONNECTION_REFUSED` for `http://localhost:8080` means the Vite frontend server is not running. Check [frontend/vite.config.ts](/D:/AI-Based-Resume-Screening-and-Analytics-Dashboard/frontend/vite.config.ts).
+- `ERR_CONNECTION_REFUSED` for `http://127.0.0.1:8000/api/v1/auth/login` means the FastAPI backend is not running. Check [frontend/src/lib/api.ts](/D:/AI-Based-Resume-Screening-and-Analytics-Dashboard/frontend/src/lib/api.ts) for the API URL and start the backend from the `backend/` folder.
+- If the backend starts but the browser blocks requests, verify `FRONTEND_ORIGIN` in [backend/.env](/D:/AI-Based-Resume-Screening-and-Analytics-Dashboard/backend/.env).
 
 ## Demo Login
 

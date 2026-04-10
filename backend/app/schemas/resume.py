@@ -1,6 +1,10 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+CandidateStatus = Literal["New", "Under Review", "Shortlisted", "Rejected", "Interviewed"]
 
 
 class ParsedResumeData(BaseModel):
@@ -13,6 +17,10 @@ class ParsedResumeData(BaseModel):
     experience_years: float | None = None
     summary: str | None = None
     raw_text_excerpt: str | None = None
+
+
+class ResumeStatusUpdate(BaseModel):
+    candidate_status: CandidateStatus
 
 
 class ResumePublic(BaseModel):
@@ -28,6 +36,7 @@ class ResumePublic(BaseModel):
     uploaded_at: datetime
     parse_status: str = "pending"
     parse_error: str | None = None
+    candidate_status: CandidateStatus = "New"
     parsed_data: ParsedResumeData | None = None
 
     model_config = ConfigDict(from_attributes=True)

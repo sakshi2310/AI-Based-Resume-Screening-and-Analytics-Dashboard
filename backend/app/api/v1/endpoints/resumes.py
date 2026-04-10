@@ -5,11 +5,12 @@ from pathlib import Path
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from pymongo import ReturnDocument
 
 from app.api.deps import get_current_staff, get_current_user
 from app.core.config import get_settings, get_upload_dir
 from app.db.mongodb import get_database
-from app.schemas.resume import ResumePublic
+from app.schemas.resume import ResumePublic, ResumeStatusUpdate
 from app.services.resume_parser import parse_resume
 
 router = APIRouter()
@@ -44,6 +45,7 @@ def serialize_resume(document: dict) -> dict:
         "uploaded_at": document["uploaded_at"],
         "parse_status": document.get("parse_status", "pending"),
         "parse_error": document.get("parse_error"),
+        "candidate_status": document.get("candidate_status", "New"),
         "parsed_data": document.get("parsed_data"),
     }
 
@@ -80,10 +82,38 @@ def validate_upload(file: UploadFile, file_size: int) -> None:
 
 
 @router.get("", response_model=list[ResumePublic])
-async def list_resumes(_: dict = Depends(get_current_user)) -> list[ResumePublic]:
+async def list_resumes(
+    search: str | None = None,
+    status: str | None = None,
+    job_id: str | None = None,
+    _: dict = Depends(get_current_user),
+) -> list[ResumePublic]:
     db = get_database()
+    query: dict = {}
+
+    if status:
+        query["candidate_status"] = status
+
+    if job_id:
+        query["job_id"] = parse_object_id(job_id, "Invalid job id")
+
+    if search:
+        regex = {"$regex": search, "$options": "i"}
+        query["$or"] = [
+            {"original_filename": regex},
+            {"job_title": regex},
+            {"uploaded_by": regex},
+            {"parsed_data.name": regex},
+            {"parsed_data.email": regex},
+            {"parsed_data.phone": regex},
+            {"parsed_data.location": regex},
+            {"parsed_data.skills": regex},
+            {"parsed_data.education": regex},
+            {"parsed_data.summary": regex},
+        ]
+
     resumes: list[ResumePublic] = []
-    async for document in db.resumes.find().sort("uploaded_at", -1):
+    async for document in db.resumes.find(query).sort("uploaded_at", -1):
         resumes.append(ResumePublic(**serialize_resume(document)))
     return resumes
 
@@ -149,6 +179,7 @@ async def upload_resumes(
             "uploaded_at": now,
             "parse_status": parse_status,
             "parse_error": parse_error,
+            "candidate_status": "New",
             "parsed_data": parsed_data,
         }
 
@@ -157,6 +188,24 @@ async def upload_resumes(
         created_records.append(ResumePublic(**serialize_resume(document)))
 
     return created_records
+
+
+@router.patch("/{resume_id}/status", response_model=ResumePublic)
+async def update_resume_status(
+    resume_id: str,
+    payload: ResumeStatusUpdate,
+    _: dict = Depends(get_current_staff),
+) -> ResumePublic:
+    db = get_database()
+    object_id = parse_object_id(resume_id, "Invalid resume id")
+    document = await db.resumes.find_one_and_update(
+        {"_id": object_id},
+        {"$set": {"candidate_status": payload.candidate_status}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found")
+    return ResumePublic(**serialize_resume(document))
 
 
 @router.delete("/{resume_id}", status_code=status.HTTP_204_NO_CONTENT)

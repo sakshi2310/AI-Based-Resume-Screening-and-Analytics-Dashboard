@@ -59,6 +59,8 @@ export interface JobPayload {
   is_active: boolean;
 }
 
+export type CandidateStatus = "New" | "Under Review" | "Shortlisted" | "Rejected" | "Interviewed";
+
 export interface ResumeRecord {
   id: string;
   original_filename: string;
@@ -72,6 +74,7 @@ export interface ResumeRecord {
   uploaded_at: string;
   parse_status: "success" | "failed" | "pending";
   parse_error: string | null;
+  candidate_status: CandidateStatus;
   parsed_data: {
     name: string | null;
     email: string | null;
@@ -236,8 +239,24 @@ export async function deleteJob(token: string, jobId: string): Promise<void> {
   }, token);
 }
 
-export async function getResumes(token: string): Promise<ResumeRecord[]> {
-  return apiRequest<ResumeRecord[]>('/resumes', {}, token);
+function buildQueryString(params: Record<string, string | undefined>) {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) {
+      searchParams.set(key, value);
+    }
+  });
+  const query = searchParams.toString();
+  return query ? `?${query}` : "";
+}
+
+export async function getResumes(token: string, options?: { search?: string; status?: CandidateStatus; job_id?: string }): Promise<ResumeRecord[]> {
+  const queryString = buildQueryString({
+    search: options?.search,
+    status: options?.status,
+    job_id: options?.job_id,
+  });
+  return apiRequest<ResumeRecord[]>(`/resumes${queryString}`, {}, token);
 }
 
 export async function uploadResumes(token: string, files: File[], jobId?: string): Promise<ResumeRecord[]> {
@@ -255,6 +274,13 @@ export async function uploadResumes(token: string, files: File[], jobId?: string
     },
     token,
   );
+}
+
+export async function updateResumeStatus(token: string, resumeId: string, candidateStatus: CandidateStatus): Promise<ResumeRecord> {
+  return apiRequest<ResumeRecord>(`/resumes/${resumeId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ candidate_status: candidateStatus }),
+  }, token);
 }
 
 export async function deleteResume(token: string, resumeId: string): Promise<void> {

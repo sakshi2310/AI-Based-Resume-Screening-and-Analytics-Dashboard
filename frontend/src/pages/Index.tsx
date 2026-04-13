@@ -4,8 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import AppLayout from "@/components/AppLayout";
 import StatsCard from "@/components/StatsCard";
 import { useAuth } from "@/contexts/AuthContext";
-import { getJobs, getResumes, type Job, type ResumeRecord } from "@/lib/api";
-import { getWeightedMatchScore } from "@/lib/utils";
+import { getJobs, getResumes, getResumeFinalScore, type Job, type ResumeRecord } from "@/lib/api";
 import { toast } from "sonner";
 
 const tooltipStyle = {
@@ -50,24 +49,9 @@ const Dashboard = () => {
       return acc;
     }, {});
 
-    const skills = resumes
-      .flatMap((resume) => resume.parsed_data?.skills ?? [])
-      .reduce<Record<string, number>>((acc, skill) => {
-        if (!skill.trim()) return acc;
-        acc[skill] = (acc[skill] ?? 0) + 1;
-        return acc;
-      }, {});
-
     const jobCounts = resumes.reduce<Record<string, number>>((acc, resume) => {
       const key = resume.job_title ?? "Unmapped";
       acc[key] = (acc[key] ?? 0) + 1;
-      return acc;
-    }, {});
-
-    const experienceBuckets = resumes.reduce<Record<string, number>>((acc, resume) => {
-      const value = resume.parsed_data?.experience_years ?? 0;
-      const bucket = value < 2 ? "0-2 yrs" : value < 4 ? "2-4 yrs" : value < 6 ? "4-6 yrs" : "6+ yrs";
-      acc[bucket] = (acc[bucket] ?? 0) + 1;
       return acc;
     }, {});
 
@@ -79,18 +63,7 @@ const Dashboard = () => {
       rejected: statusCounts["Rejected"] ?? 0,
       avgScore: resumes.length
         ? Math.round(
-            resumes.reduce((sum, resume) => {
-              const job = jobs.find((item) => item.id === resume.job_id);
-              const { totalScore } = getWeightedMatchScore(
-                resume.parsed_data?.skills,
-                resume.parsed_data?.experience_years,
-                resume.parsed_data?.education,
-                job?.skills,
-                job?.min_experience_years,
-                job?.max_experience_years,
-              );
-              return sum + totalScore;
-            }, 0) / resumes.length,
+            resumes.reduce((sum, resume) => sum + getResumeFinalScore(resume), 0) / resumes.length,
           )
         : 0,
       statusDistribution: Object.entries(statusCounts).map(([name, value], index) => ({ name, value, fill: ["hsl(199, 89%, 48%)", "hsl(38, 92%, 50%)", "hsl(142, 76%, 36%)", "hsl(0, 84%, 60%)", "hsl(262, 83%, 58%)"][index % 5] })),
@@ -98,17 +71,9 @@ const Dashboard = () => {
       scoreDistribution: ["0-20", "20-40", "40-60", "60-80", "80-100"].map((range) => ({
         range,
         count: resumes.filter((resume) => {
-          const job = jobs.find((item) => item.id === resume.job_id);
-          const { totalScore } = getWeightedMatchScore(
-            resume.parsed_data?.skills,
-            resume.parsed_data?.experience_years,
-            resume.parsed_data?.education,
-            job?.skills,
-            job?.min_experience_years,
-            job?.max_experience_years,
-          );
+          const score = getResumeFinalScore(resume);
           const [min, max] = range.split("-").map(Number);
-          return totalScore >= min && totalScore < max;
+          return score >= min && score < max;
         }).length,
       })),
     };

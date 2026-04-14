@@ -120,9 +120,91 @@ export function getResumeFinalScore(resume: ResumeRecord): number {
   return 0;
 }
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api/v1").replace(/\/$/, "");
-const API_ORIGIN   = API_BASE_URL.replace(/\/api\/v1$/, "");
+const DEFAULT_API_PORT = "8000";
 const REQUEST_TIMEOUT_MS = 15000;
+
+function stripTrailingSlash(value: string): string {
+  return value.replace(/\/$/, "");
+}
+
+function normalizeApiBaseUrl(value: string): string {
+  return stripTrailingSlash(value.trim().replace(/\/+api\/v1\/?$/, "/api/v1"));
+}
+
+function getCandidateApiBaseUrls(): string[] {
+  const configured = import.meta.env.VITE_API_BASE_URL?.trim();
+  const candidates = new Set<string>();
+
+  if (configured) {
+    candidates.add(normalizeApiBaseUrl(configured));
+  }
+
+  if (typeof window !== "undefined") {
+    candidates.add("/api/v1");
+
+    const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+    const hostname = window.location.hostname;
+    const preferredHostnames = [hostname, "127.0.0.1", "localhost"];
+
+    preferredHostnames
+      .filter(Boolean)
+      .forEach((host) => candidates.add(`${protocol}//${host}:${DEFAULT_API_PORT}/api/v1`));
+
+    if (hostname === "::1" || hostname === "[::1]") {
+      candidates.add(`${protocol}://[::1]:${DEFAULT_API_PORT}/api/v1`);
+    }
+  }
+
+  candidates.add(`http://127.0.0.1:${DEFAULT_API_PORT}/api/v1`);
+  candidates.add(`http://localhost:${DEFAULT_API_PORT}/api/v1`);
+  candidates.add(`http://[::1]:${DEFAULT_API_PORT}/api/v1`);
+
+  return Array.from(candidates);
+}
+
+let resolvedApiBaseUrl: string | null = null;
+let resolvingApiBaseUrlPromise: Promise<string> | null = null;
+
+async function resolveApiBaseUrl(): Promise<string> {
+  if (resolvedApiBaseUrl) return resolvedApiBaseUrl;
+  if (resolvingApiBaseUrlPromise) return resolvingApiBaseUrlPromise;
+
+  resolvingApiBaseUrlPromise = (async () => {
+    const candidates = getCandidateApiBaseUrls();
+
+    for (const candidate of candidates) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 2500);
+        const response = await fetch(`${candidate}/health`, {
+          method: "GET",
+          signal: controller.signal,
+        });
+        window.clearTimeout(timeoutId);
+
+        if (response.ok) {
+          resolvedApiBaseUrl = candidate;
+          return candidate;
+        }
+      } catch {
+        // Try the next candidate base URL.
+      }
+    }
+
+    resolvedApiBaseUrl = candidates[0];
+    return resolvedApiBaseUrl;
+  })();
+
+  try {
+    return await resolvingApiBaseUrlPromise;
+  } finally {
+    resolvingApiBaseUrlPromise = null;
+  }
+}
+
+function getApiOrigin(apiBaseUrl: string): string {
+  return apiBaseUrl.replace(/\/api\/v1$/, "");
+}
 
 function extractErrorMessage(detail: unknown): string {
   if (typeof detail === "string" && detail.trim()) return detail;
@@ -150,11 +232,12 @@ function extractErrorMessage(detail: unknown): string {
 
 async function apiRequest<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
   const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
+  const apiBaseUrl = await resolveApiBaseUrl();
   const controller = new AbortController();
   const timeoutId  = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(`${apiBaseUrl}${path}`, {
       ...init,
       signal: controller.signal,
       headers: {
@@ -165,8 +248,8 @@ async function apiRequest<T>(path: string, init: RequestInit = {}, token?: strin
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError")
-      throw new Error("Request timed out. Please ensure backend is running.");
-    throw new Error("Unable to reach backend API. Please check the server.");
+      throw new Error("Request timed out. Please ensure backend is running on the configured API URL.");
+    throw new Error("Unable to reach backend API. Please check backend server and API base URL.");
   } finally {
     window.clearTimeout(timeoutId);
   }
@@ -249,5 +332,6 @@ export async function deleteResume(token: string, resumeId: string): Promise<voi
 }
 
 export function buildResumeUrl(filePath: string): string {
-  return `${API_ORIGIN}${filePath}`;
+  const apiBaseUrl = resolvedApiBaseUrl ?? getCandidateApiBaseUrls()[0];
+  return `${getApiOrigin(apiBaseUrl)}${filePath}`;
 }

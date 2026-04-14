@@ -14,6 +14,34 @@ async def ensure_indexes() -> None:
     await db.resumes.create_index([("job_id", 1), ("uploaded_at", -1)])
 
 
+async def normalize_legacy_resumes() -> None:
+    db = get_database()
+
+    async for document in db.resumes.find():
+        updates: dict[str, object] = {}
+
+        stored_filename = document.get("stored_filename")
+        if (not document.get("file_url")) and isinstance(stored_filename, str) and stored_filename.strip():
+            updates["file_url"] = f"/uploads/resumes/{stored_filename.strip()}"
+
+        if "file_size_bytes" in document:
+            try:
+                normalized_size = int(document.get("file_size_bytes") or 0)
+            except (TypeError, ValueError):
+                normalized_size = 0
+            if document.get("file_size_bytes") != normalized_size:
+                updates["file_size_bytes"] = normalized_size
+
+        if "mime_type" not in document or not document.get("mime_type"):
+            updates["mime_type"] = "application/octet-stream"
+
+        if "candidate_status" not in document or not document.get("candidate_status"):
+            updates["candidate_status"] = "New"
+
+        if updates:
+            await db.resumes.update_one({"_id": document["_id"]}, {"$set": updates})
+
+
 async def seed_demo_admin() -> None:
     settings = get_settings()
     db = get_database()

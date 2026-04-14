@@ -1,7 +1,9 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -19,6 +21,13 @@ class Settings(BaseSettings):
     demo_admin_password: str = "Admin@123"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @field_validator("frontend_origin", mode="before")
+    @classmethod
+    def normalize_frontend_origin(cls, value: Any) -> str:
+        if isinstance(value, str):
+            return value.strip().strip('"').strip("'")
+        return str(value)
 
 
 @lru_cache

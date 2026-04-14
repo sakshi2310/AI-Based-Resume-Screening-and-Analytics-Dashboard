@@ -77,6 +77,7 @@ export interface AiScoreData {
   profile_score:    number;
   matched_skills:   string[];
   missing_skills:   string[];
+
   breakdown:        string;
   method:           string; // always "semantic_ai"
 }

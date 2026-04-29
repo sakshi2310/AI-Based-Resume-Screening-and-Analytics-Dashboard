@@ -9,7 +9,7 @@ const navItems = [
   { to: "/upload", icon: Upload, label: "Upload Resume" },
   { to: "/screening", icon: Brain, label: "Screening" },
   { to: "/analytics", icon: BarChart3, label: "Analytics" },
-  { to: "/search", icon: Search, label: "Search" },
+  { to: "/search", icon: Search, label: "Summary" },
   { to: "/reports", icon: FileText, label: "Reports" },
 ];
 

@@ -8,8 +8,9 @@ It now also includes a simple `signup flow` for creating new users in the colleg
 ## Project Structure
 
 ```text
-frontend/   React UI shell and API client
-backend/    FastAPI app, config, MongoDB connection, health route
+frontend/    React UI shell and API client
+backend/     New FastAPI + ML backend for parsing, screening, and evaluation
+backend-old/ Previous rule-based and similarity-based implementation for reference
 ```
 
 ## Backend Setup
@@ -20,7 +21,7 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item .env.example .env
-python -m uvicorn app.main:app --reload --port 8000
+python -m uvicorn main:app --reload --port 8000
 ```
 
 ## Frontend Setup

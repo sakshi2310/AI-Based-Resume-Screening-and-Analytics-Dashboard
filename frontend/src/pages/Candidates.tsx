@@ -59,12 +59,14 @@ const Candidates = () => {
 
         // ── AI scores from backend (sentence-transformers) ─────────────────
         const ai = resume.ai_score;
-        const totalScore    = Math.round(getResumeFinalScore(resume));
-        const skillScore    = ai ? Math.round(ai.skill_score)   : 0;
-        const matchedSkills = ai ? ai.matched_skills             : [];
-        const missingSkills = ai ? ai.missing_skills             : [];
+        const totalScore          = Math.round(getResumeFinalScore(resume));
+        const skillScore          = ai ? Math.round(ai.skill_score) : 0;
+        const matchedSkills       = ai ? ai.matched_skills : [];
+        const missingSkills       = ai ? ai.missing_skills : [];
+        const experienceLabel     = resume.parsed_data?.experience_years == null ? "Not detected" : `${resume.parsed_data.experience_years} yrs`;
+        const aiRecommendedStatus = resume.ai_recommended_status;
 
-        return { resume, job, totalScore, skillScore, matchedSkills, missingSkills };
+        return { resume, job, totalScore, skillScore, matchedSkills, missingSkills, experienceLabel, aiRecommendedStatus };
       })
       .sort((a, b) => b.totalScore - a.totalScore);
   }, [resumes, jobs]);
@@ -112,10 +114,9 @@ const Candidates = () => {
                 </tr>
               </thead>
               <tbody>
-                {candidates.map(({ resume, job, totalScore, skillScore, matchedSkills, missingSkills }) => {
+                {candidates.map(({ resume, job, totalScore, skillScore, matchedSkills, missingSkills, experienceLabel, aiRecommendedStatus }) => {
                   const candidateName  = resume.parsed_data?.name  ?? resume.original_filename;
                   const candidateEmail = resume.parsed_data?.email ?? "—";
-                  const experience     = resume.parsed_data?.experience_years ?? 0;
                   const hasAiScore     = !!resume.ai_score;
 
                   return (
@@ -174,7 +175,7 @@ const Candidates = () => {
                       </td>
 
                       {/* Experience */}
-                      <td className="p-4 text-sm text-muted-foreground">{experience} yrs</td>
+                      <td className="p-4 text-sm text-muted-foreground">{experienceLabel}</td>
 
                       {/* Status dropdown */}
                       <td className="p-4">

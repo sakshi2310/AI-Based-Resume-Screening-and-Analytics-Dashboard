@@ -1,142 +1,243 @@
-import { useEffect, useMemo, useState } from "react";
-import { Search as SearchIcon, Filter } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowDownUp, Filter, Search as SearchIcon } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+
+import SummaryCandidateCard from "@/components/SummaryCandidateCard";
 import AppLayout from "@/components/AppLayout";
-import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getJobs, getResumes, type Job, type ResumeRecord, type CandidateStatus } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  confirmCandidateStatus,
+  getResumes,
+  resendCandidateEmail,
+  type EmailStatus,
+  type FinalCandidateStatus,
+  type ResumeRecord,
+} from "@/lib/api";
 import { toast } from "sonner";
 
-const statusColors: Record<CandidateStatus, string> = {
-  New: "bg-info/20 text-info",
-  "Under Review": "bg-warning/20 text-warning",
-  Shortlisted: "bg-success/20 text-success",
-  Rejected: "bg-destructive/20 text-destructive",
-  Interviewed: "bg-primary/20 text-primary",
-};
-
-const statusOptions: CandidateStatus[] = ["New", "Under Review", "Shortlisted", "Rejected", "Interviewed"];
+type FilterValue = "all" | "needs_action" | "Shortlisted" | "Under Review" | "Rejected" | "email_failed";
+type SortValue = "score_desc" | "score_asc" | "latest";
 
 const SearchPage = () => {
   const { session } = useAuth();
+  const navigate = useNavigate();
   const [resumes, setResumes] = useState<ResumeRecord[]>([]);
-  const [jobs, setJobs] = useState<Job[]>([]);
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<FilterValue>("all");
+  const [sortBy, setSortBy] = useState<SortValue>("score_desc");
   const [loading, setLoading] = useState(true);
+  const [busyCandidateId, setBusyCandidateId] = useState<string | null>(null);
+  const previousEmailStatuses = useRef<Record<string, EmailStatus | null | undefined>>({});
+  const hasLoadedSnapshot = useRef(false);
+
+  const applySnapshot = (records: ResumeRecord[], announceEmailTransitions: boolean) => {
+    if (announceEmailTransitions && hasLoadedSnapshot.current) {
+      records.forEach((record) => {
+        const previousStatus = previousEmailStatuses.current[record.id];
+        const currentStatus = record.email_status;
+        const candidateName = record.candidate_name || record.parsed_data?.name || record.original_filename;
+
+        if (previousStatus === "pending" && currentStatus === "sent") {
+          toast.success(`Email sent successfully to ${candidateName}`);
+        }
+
+        if (previousStatus === "pending" && currentStatus === "failed") {
+          toast.error(`Email failed for ${candidateName}`);
+        }
+      });
+    }
+
+    previousEmailStatuses.current = Object.fromEntries(records.map((record) => [record.id, record.email_status]));
+    hasLoadedSnapshot.current = true;
+    setResumes(records);
+  };
+
+  const loadSummary = async (announceEmailTransitions: boolean) => {
+    if (!session?.access_token) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const resumeData = await getResumes(session.access_token);
+      applySnapshot(resumeData, announceEmailTransitions);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to load summary data");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const loadData = async () => {
-      if (!session?.access_token) {
-        setLoading(false);
-        return;
-      }
-      try {
-        const [resumeData, jobData] = await Promise.all([
-          getResumes(session.access_token),
-          getJobs(session.access_token),
-        ]);
-        setResumes(resumeData);
-        setJobs(jobData);
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Unable to load search data");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadData();
+    setLoading(true);
+    loadSummary(false);
   }, [session?.access_token]);
 
+  useEffect(() => {
+    if (!session?.access_token) return;
+    if (!resumes.some((resume) => resume.email_status === "pending")) return;
+
+    const intervalId = window.setInterval(() => {
+      loadSummary(true);
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [resumes, session?.access_token]);
+
   const filtered = useMemo(() => {
-    return resumes.filter((resume) => {
-      const queryValue = query.trim().toLowerCase();
-      const candidateName = resume.parsed_data?.name?.toLowerCase() ?? "";
-      const candidateEmail = resume.parsed_data?.email?.toLowerCase() ?? "";
-      const candidateSkills = resume.parsed_data?.skills?.map((skill) => skill.toLowerCase()) ?? [];
-      const job = jobs.find((jobItem) => jobItem.id === resume.job_id);
-      const jobTitle = job?.title.toLowerCase() ?? resume.job_title?.toLowerCase() ?? "";
+    const normalizedQuery = query.trim().toLowerCase();
 
-      const matchesQuery =
-        !queryValue ||
-        candidateName.includes(queryValue) ||
-        candidateEmail.includes(queryValue) ||
-        jobTitle.includes(queryValue) ||
-        candidateSkills.some((skill) => skill.includes(queryValue));
+    return resumes
+      .filter((resume) => {
+        const candidateName = (resume.candidate_name || resume.parsed_data?.name || resume.original_filename).toLowerCase();
+        const candidateEmail = resume.parsed_data?.email?.toLowerCase() ?? "";
+        const jobTitle = resume.job_title?.toLowerCase() ?? "";
+        const matchedSkills = resume.matched_skills.map((skill) => skill.toLowerCase());
+        const missingSkills = resume.missing_skills.map((skill) => skill.toLowerCase());
+        const matchesQuery =
+          !normalizedQuery ||
+          candidateName.includes(normalizedQuery) ||
+          candidateEmail.includes(normalizedQuery) ||
+          jobTitle.includes(normalizedQuery) ||
+          matchedSkills.some((skill) => skill.includes(normalizedQuery)) ||
+          missingSkills.some((skill) => skill.includes(normalizedQuery));
 
-      const matchesStatus = statusFilter === "all" || resume.candidate_status === statusFilter;
-      return matchesQuery && matchesStatus;
-    });
-  }, [resumes, jobs, query, statusFilter]);
+        if (!matchesQuery) return false;
+
+        if (statusFilter === "all") return true;
+        if (statusFilter === "needs_action") return !resume.final_status;
+        if (statusFilter === "email_failed") return resume.email_status === "failed";
+        return resume.final_status === statusFilter || resume.ml_suggested_status === statusFilter || resume.candidate_status === statusFilter;
+      })
+      .sort((left, right) => {
+        const leftScore = left.score ?? 0;
+        const rightScore = right.score ?? 0;
+
+        if (sortBy === "score_asc") return leftScore - rightScore;
+        if (sortBy === "latest") return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
+        return rightScore - leftScore;
+      });
+  }, [query, resumes, sortBy, statusFilter]);
+
+  const handleConfirmStatus = async (candidateId: string, finalStatus: FinalCandidateStatus) => {
+    if (!session?.access_token) return;
+
+    try {
+      setBusyCandidateId(candidateId);
+      const updated = await confirmCandidateStatus(session.access_token, candidateId, finalStatus);
+      const next = resumes.map((resume) => (resume.id === updated.id ? updated : resume));
+      applySnapshot(next, false);
+      toast.success("Status confirmed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to confirm candidate status");
+    } finally {
+      setBusyCandidateId(null);
+    }
+  };
+
+  const handleResendEmail = async (candidateId: string) => {
+    if (!session?.access_token) return;
+
+    try {
+      setBusyCandidateId(candidateId);
+      const updated = await resendCandidateEmail(session.access_token, candidateId);
+      const next = resumes.map((resume) => (resume.id === updated.id ? updated : resume));
+      applySnapshot(next, false);
+      toast.success("Email retry queued");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to resend candidate email");
+    } finally {
+      setBusyCandidateId(null);
+    }
+  };
+
+  const pendingReviewCount = resumes.filter((resume) => !resume.final_status).length;
+  const sentEmailCount = resumes.filter((resume) => resume.email_status === "sent").length;
 
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Search & Filter</h1>
-          <p className="text-muted-foreground mt-1">Find candidates by name, skill, job, or status</p>
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Summary</h1>
+            <p className="mt-1 text-muted-foreground">HR confirmation dashboard for ML-screened candidates and automated communication.</p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <Badge variant="outline" className="border-primary/30 bg-primary/10 px-3 py-1 text-primary">
+              {pendingReviewCount} awaiting HR decision
+            </Badge>
+            <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-emerald-300">
+              {sentEmailCount} emails sent
+            </Badge>
+          </div>
         </div>
 
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="relative flex-1">
-            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+          <div className="relative">
+            <SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="pl-10"
-              placeholder="Search by name, email, or skill..."
+              placeholder="Search by candidate, job, matched skill, or missing skill..."
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(event) => setQuery(event.target.value)}
             />
           </div>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-full sm:w-48">
-              <Filter className="w-4 h-4 mr-2" />
-              <SelectValue placeholder="Status" />
+
+          <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as FilterValue)}>
+            <SelectTrigger>
+              <Filter className="mr-2 h-4 w-4" />
+              <SelectValue placeholder="Filter status" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All statuses</SelectItem>
-              {statusOptions.map((status) => (
-                <SelectItem key={status} value={status}>{status}</SelectItem>
-              ))}
+              <SelectItem value="all">All candidates</SelectItem>
+              <SelectItem value="needs_action">Pending HR action</SelectItem>
+              <SelectItem value="Shortlisted">Shortlisted</SelectItem>
+              <SelectItem value="Under Review">Under Review</SelectItem>
+              <SelectItem value="Rejected">Rejected</SelectItem>
+              <SelectItem value="email_failed">Email failed</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={sortBy} onValueChange={(value) => setSortBy(value as SortValue)}>
+            <SelectTrigger>
+              <ArrowDownUp className="mr-2 h-4 w-4" />
+              <SelectValue placeholder="Sort by" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="score_desc">Highest score</SelectItem>
+              <SelectItem value="score_asc">Lowest score</SelectItem>
+              <SelectItem value="latest">Latest updated</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
-        <p className="text-sm text-muted-foreground">{loading ? "Loading candidates..." : `${filtered.length} candidates found`}</p>
+        <p className="text-sm text-muted-foreground">{loading ? "Loading summary..." : `${filtered.length} candidates in summary`}</p>
 
-        <div className="space-y-3">
-          {filtered.map((resume) => {
-            const job = jobs.find((j) => j.id === resume.job_id);
-            const initials = (resume.parsed_data?.name || resume.original_filename)
-              .split(" ")
-              .map((part) => part[0])
-              .join("")
-              .slice(0, 2)
-              .toUpperCase();
-            const parsedSkills = resume.parsed_data?.skills?.map((s) => s.toLowerCase()) ?? [];
-            const score = job?.skills
-              ? Math.round(
-                  (job.skills.filter((skill) => parsedSkills.includes(skill.toLowerCase())).length / job.skills.length) * 100,
-                )
-              : 0;
-
-            return (
-              <div key={resume.id} className="glass-card p-4 flex flex-col gap-4 md:flex-row md:items-center md:justify-between animate-fade-in">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center text-xs font-bold text-secondary-foreground">{initials}</div>
-                  <div>
-                    <p className="text-sm font-medium text-foreground">{resume.parsed_data?.name || resume.original_filename}</p>
-                    <p className="text-xs text-muted-foreground">{job?.title || resume.job_title || "Unmapped position"} • {resume.parsed_data?.experience_years ?? "N/A"} yrs</p>
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <span className={`text-sm font-bold ${score >= 85 ? "text-success" : score >= 70 ? "text-warning" : "text-destructive"}`}>{score}%</span>
-                  <Badge className={`border-0 text-xs ${statusColors[resume.candidate_status]}`}>{resume.candidate_status}</Badge>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        {loading ? (
+          <div className="rounded-2xl border border-border/60 bg-background/70 p-8 text-center text-muted-foreground">
+            Loading candidate summary...
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="rounded-2xl border border-border/60 bg-background/70 p-8 text-center text-muted-foreground">
+            No candidates match the current filters.
+          </div>
+        ) : (
+          <div className="grid gap-4">
+            {filtered.map((candidate) => (
+              <SummaryCandidateCard
+                key={candidate.id}
+                candidate={candidate}
+                isBusy={busyCandidateId === candidate.id}
+                onConfirm={(finalStatus) => handleConfirmStatus(candidate.id, finalStatus)}
+                onResendEmail={() => handleResendEmail(candidate.id)}
+                onViewScreening={() => navigate(`/screening?resumeId=${candidate.id}`)}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </AppLayout>
   );

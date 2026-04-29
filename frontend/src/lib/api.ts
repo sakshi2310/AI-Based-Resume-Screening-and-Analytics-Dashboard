@@ -22,6 +22,12 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
+interface ApiHealthResponse {
+  status?: string;
+  database?: string;
+  database_connected?: boolean;
+}
+
 export interface Job {
   id: string;
   title: string;
@@ -67,6 +73,9 @@ export interface JobPayload {
 }
 
 export type CandidateStatus = "New" | "Under Review" | "Shortlisted" | "Rejected" | "Interviewed";
+export type StatusSource = "ai" | "manual";
+export type FinalCandidateStatus = "Shortlisted" | "Under Review" | "Rejected";
+export type EmailStatus = "pending" | "sent" | "failed";
 
 /** AI scoring breakdown returned by backend — output of ai_scorer.compute_ai_score() */
 export interface AiScoreData {
@@ -93,9 +102,21 @@ export interface ResumeRecord {
   job_title: string | null;
   uploaded_by: string;
   uploaded_at: string;
+  created_at: string;
+  updated_at: string;
   parse_status: "success" | "failed" | "pending";
   parse_error: string | null;
+  candidate_name: string | null;
+  score: number | null;
+  matched_skills: string[];
+  missing_skills: string[];
+  ml_suggested_status: CandidateStatus | null;
   candidate_status: CandidateStatus;
+  status_source: StatusSource;
+  final_status: FinalCandidateStatus | null;
+  email_status: EmailStatus | null;
+  email_error: string | null;
+  email_sent_at: string | null;
   predicted_score: number | null;
   parsed_data: {
     name: string | null;
@@ -112,9 +133,13 @@ export interface ResumeRecord {
   } | null;
   ai_score: AiScoreData | null;       // AI scoring breakdown from backend
   ai_explanation: string | null;      // Gemini recruiter insight
+  ai_recommended_status: CandidateStatus | null;
+  ai_status_reason: string | null;
+  ai_fairness_note: string | null;
 }
 
 export function getResumeFinalScore(resume: ResumeRecord): number {
+  if (resume.score != null) return resume.score;
   if (resume.ai_score?.final_score != null) return resume.ai_score.final_score;
   if (resume.predicted_score != null) return resume.predicted_score * 100;
   return 0;
@@ -122,6 +147,21 @@ export function getResumeFinalScore(resume: ResumeRecord): number {
 
 const DEFAULT_API_PORT = "8000";
 const REQUEST_TIMEOUT_MS = 15000;
+const HEALTHCHECK_TIMEOUT_MS = 2500;
+const BACKEND_STARTUP_WAIT_MS = 30000;
+const BACKEND_RETRY_DELAY_MS = 800;
+
+export class ApiError extends Error {
+  status?: number;
+  code?: string;
+
+  constructor(message: string, options: { status?: number; code?: string } = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = options.status;
+    this.code = options.code;
+  }
+}
 
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/$/, "");
@@ -164,34 +204,78 @@ function getCandidateApiBaseUrls(): string[] {
 
 let resolvedApiBaseUrl: string | null = null;
 let resolvingApiBaseUrlPromise: Promise<string> | null = null;
+let backendReady = false;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isHealthPayloadReady(payload: ApiHealthResponse | null): boolean {
+  if (!payload) return false;
+  if (payload.database_connected === true) return true;
+  if (payload.database === "connected") return true;
+  return payload.status === "ok";
+}
+
+async function readJsonSafely<T>(response: Response): Promise<T | null> {
+  try {
+    return await response.json() as T;
+  } catch {
+    return null;
+  }
+}
+
+async function probeApiBaseUrl(candidate: string): Promise<{ reachable: boolean; ready: boolean }> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), HEALTHCHECK_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${candidate}/health`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    const payload = await readJsonSafely<ApiHealthResponse>(response);
+    return {
+      reachable: response.ok,
+      ready: response.ok && isHealthPayloadReady(payload),
+    };
+  } catch {
+    return { reachable: false, ready: false };
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
 
 async function resolveApiBaseUrl(): Promise<string> {
-  if (resolvedApiBaseUrl) return resolvedApiBaseUrl;
+  if (resolvedApiBaseUrl && backendReady) return resolvedApiBaseUrl;
   if (resolvingApiBaseUrlPromise) return resolvingApiBaseUrlPromise;
 
   resolvingApiBaseUrlPromise = (async () => {
     const candidates = getCandidateApiBaseUrls();
+    const deadline = Date.now() + BACKEND_STARTUP_WAIT_MS;
+    let fallbackCandidate = resolvedApiBaseUrl ?? candidates[0];
 
-    for (const candidate of candidates) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = window.setTimeout(() => controller.abort(), 2500);
-        const response = await fetch(`${candidate}/health`, {
-          method: "GET",
-          signal: controller.signal,
-        });
-        window.clearTimeout(timeoutId);
+    while (Date.now() < deadline) {
+      for (const candidate of candidates) {
+        const probe = await probeApiBaseUrl(candidate);
 
-        if (response.ok) {
+        if (probe.reachable) {
+          fallbackCandidate = candidate;
+          if (!resolvedApiBaseUrl) resolvedApiBaseUrl = candidate;
+        }
+
+        if (probe.ready) {
           resolvedApiBaseUrl = candidate;
+          backendReady = true;
           return candidate;
         }
-      } catch {
-        // Try the next candidate base URL.
       }
+
+      await delay(BACKEND_RETRY_DELAY_MS);
     }
 
-    resolvedApiBaseUrl = candidates[0];
+    resolvedApiBaseUrl = fallbackCandidate;
+    backendReady = false;
     return resolvedApiBaseUrl;
   })();
 
@@ -232,36 +316,80 @@ function extractErrorMessage(detail: unknown): string {
 
 async function apiRequest<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
   const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
-  const apiBaseUrl = await resolveApiBaseUrl();
-  const controller = new AbortController();
-  const timeoutId  = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  let response: Response;
-  try {
-    response = await fetch(`${apiBaseUrl}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(!isFormData ? { "Content-Type": "application/json" } : {}),
-        ...(init.headers || {}),
-      },
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError")
-      throw new Error("Request timed out. Please ensure backend is running on the configured API URL.");
-    throw new Error("Unable to reach backend API. Please check backend server and API base URL.");
-  } finally {
-    window.clearTimeout(timeoutId);
+  const maxAttempts = 2;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const apiBaseUrl = await resolveApiBaseUrl();
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(`${apiBaseUrl}${path}`, {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(!isFormData ? { "Content-Type": "application/json" } : {}),
+          ...(init.headers || {}),
+        },
+      });
+
+      if (!response.ok) {
+        let message = "Request failed";
+        try {
+          const payload = await response.json();
+          message = extractErrorMessage(payload.detail);
+        } catch {
+          message = response.statusText || message;
+        }
+
+        if (response.status >= 500 || response.status === 503) {
+          backendReady = false;
+          if (attempt < maxAttempts) {
+            await delay(BACKEND_RETRY_DELAY_MS);
+            continue;
+          }
+        }
+
+        throw new ApiError(message, { status: response.status, code: "request_failed" });
+      }
+
+      backendReady = true;
+      if (response.status === 204) return undefined as T;
+      return response.json() as Promise<T>;
+    } catch (error) {
+      backendReady = false;
+      resolvedApiBaseUrl = null;
+
+      if (attempt < maxAttempts) {
+        await delay(BACKEND_RETRY_DELAY_MS);
+        continue;
+      }
+
+      if (error instanceof ApiError) {
+        throw error;
+      }
+
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new ApiError(
+          "Backend is still starting. Please wait a few seconds and try again.",
+          { code: "backend_timeout" },
+        );
+      }
+
+      throw new ApiError(
+        "Unable to reach backend API. Please wait a few seconds and try again.",
+        { code: "backend_unreachable" },
+      );
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
-  if (!response.ok) {
-    let message = "Request failed";
-    try { const p = await response.json(); message = extractErrorMessage(p.detail); }
-    catch { message = response.statusText || message; }
-    throw new Error(message);
-  }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  throw new ApiError("Backend is still starting. Please wait a few seconds and try again.", {
+    status: 503,
+    code: "backend_unavailable",
+  });
 }
 
 export async function registerUser(payload: { email: string; full_name: string; password: string; role?: AppRole }): Promise<AuthResponse> {
@@ -325,6 +453,14 @@ export async function uploadResumes(token: string, files: File[], jobId?: string
 
 export async function updateResumeStatus(token: string, resumeId: string, candidateStatus: CandidateStatus): Promise<ResumeRecord> {
   return apiRequest<ResumeRecord>(`/resumes/${resumeId}/status`, { method: "PATCH", body: JSON.stringify({ candidate_status: candidateStatus }) }, token);
+}
+
+export async function confirmCandidateStatus(token: string, candidateId: string, finalStatus: FinalCandidateStatus): Promise<ResumeRecord> {
+  return apiRequest<ResumeRecord>(`/candidates/${candidateId}/confirm-status`, { method: "POST", body: JSON.stringify({ final_status: finalStatus }) }, token);
+}
+
+export async function resendCandidateEmail(token: string, candidateId: string): Promise<ResumeRecord> {
+  return apiRequest<ResumeRecord>(`/candidates/${candidateId}/resend-email`, { method: "POST" }, token);
 }
 
 export async function deleteResume(token: string, resumeId: string): Promise<void> {

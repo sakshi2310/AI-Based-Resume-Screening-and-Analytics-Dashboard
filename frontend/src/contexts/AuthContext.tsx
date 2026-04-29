@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { AuthResponse, AuthUser, getCurrentUser, loginUser, registerUser } from '@/lib/api';
+import { ApiError, AuthResponse, AuthUser, getCurrentUser, loginUser, registerUser } from '@/lib/api';
 
 interface AuthContextType {
   session: { access_token: string } | null;
@@ -33,11 +33,22 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [roles, setRoles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const persistAuth = (payload: AuthResponse) => {
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(payload));
+  const applyAuthState = (payload: AuthResponse) => {
     setSession({ access_token: payload.access_token });
     setUser(payload.user);
     setRoles([payload.user.role]);
+  };
+
+  const persistAuth = (payload: AuthResponse) => {
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(payload));
+    applyAuthState(payload);
+  };
+
+  const clearAuthState = () => {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    setSession(null);
+    setUser(null);
+    setRoles([]);
   };
 
   useEffect(() => {
@@ -50,13 +61,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       try {
         const parsed = JSON.parse(storedValue) as AuthResponse;
+        applyAuthState(parsed);
         const freshUser = await getCurrentUser(parsed.access_token);
         persistAuth({ ...parsed, user: freshUser });
-      } catch {
-        localStorage.removeItem(AUTH_STORAGE_KEY);
-        setSession(null);
-        setUser(null);
-        setRoles([]);
+      } catch (error) {
+        const isTransientStartupFailure =
+          error instanceof ApiError && (error.status == null || error.status >= 500);
+
+        if (!isTransientStartupFailure) {
+          clearAuthState();
+        }
       } finally {
         setLoading(false);
       }
@@ -76,10 +90,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const signOut = async () => {
-    localStorage.removeItem(AUTH_STORAGE_KEY);
-    setSession(null);
-    setUser(null);
-    setRoles([]);
+    clearAuthState();
   };
 
   return (

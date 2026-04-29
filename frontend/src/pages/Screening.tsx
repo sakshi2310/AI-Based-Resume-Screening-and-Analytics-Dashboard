@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import AppLayout from "@/components/AppLayout";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -17,6 +18,7 @@ import { Brain, CheckCircle, Sparkles, XCircle, Zap } from "lucide-react";
 
 const Screening = () => {
   const { session } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [resumes, setResumes] = useState<ResumeRecord[]>([]);
   const [jobs, setJobs]       = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,17 +55,22 @@ const Screening = () => {
           skillScore:        ai ? Math.round(ai.skill_score)      : 0,
           experienceScore:   ai ? Math.round(ai.experience_score) : 0,
           educationScore:    ai ? Math.round(ai.education_score)  : 0,
-          completenessScore: ai ? Math.round(ai.profile_score)    : 0,
+          profileScore:      ai ? Math.round(ai.profile_score)    : 0,
           matchedSkills:     ai ? ai.matched_skills                : [],
           missingSkills:     ai ? ai.missing_skills                : [],
           breakdown:         ai ? ai.breakdown                     : "No AI score available — upload resume with a job selected.",
           hasAiScore:        !!ai,
+          aiRecommendedStatus: resume.ai_recommended_status,
+          statusSource:        resume.status_source,
         };
       })
       .sort((a, b) => b.totalScore - a.totalScore);
   }, [resumes, jobs]);
 
   const aiScoredCount = candidates.filter((c) => c.hasAiScore).length;
+  const selectedResumeId = searchParams.get("resumeId");
+  const visibleCandidates = selectedResumeId ? candidates.filter((candidate) => candidate.resume.id === selectedResumeId) : candidates;
+  const selectedCandidate = selectedResumeId ? candidates.find((candidate) => candidate.resume.id === selectedResumeId) : null;
 
   return (
     <AppLayout>
@@ -80,6 +87,9 @@ const Screening = () => {
             <p className="text-xs text-muted-foreground mt-0.5">
               Skills (40%) + Experience (30%) + Education (20%) + Profile (10%)
             </p>
+            <p className="text-xs text-muted-foreground">
+              Profile blends overall semantic fit and screening quality checks.
+            </p>
           </div>
           {aiScoredCount > 0 && (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-cyan-500/40 bg-cyan-500/10 self-start">
@@ -89,6 +99,26 @@ const Screening = () => {
           )}
         </div>
 
+        {selectedResumeId && (
+          <div className="flex flex-col gap-3 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                Focused screening view{selectedCandidate ? `: ${selectedCandidate.resume.parsed_data?.name || selectedCandidate.resume.original_filename}` : ""}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                This candidate was opened from Search so you can review the full AI breakdown in one place.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSearchParams({})}
+              className="rounded-lg border border-border/60 px-3 py-2 text-sm text-foreground transition-colors hover:bg-muted/40"
+            >
+              Show all candidates
+            </button>
+          </div>
+        )}
+
         {/* ── Candidate cards ──────────────────────────────────────────────── */}
         {loading ? (
           <div className="rounded-2xl border border-border/60 bg-background/70 p-8 text-center text-muted-foreground">
@@ -96,20 +126,21 @@ const Screening = () => {
           </div>
         ) : (
           <div className="space-y-4">
-            {candidates.length === 0 ? (
+            {visibleCandidates.length === 0 ? (
               <div className="rounded-2xl border border-border/60 bg-background/70 p-8 text-center text-muted-foreground">
-                No candidates yet. Upload resumes and map them to a job to see AI scores.
+                {selectedResumeId ? "No screening record was found for that candidate." : "No candidates yet. Upload resumes and map them to a job to see AI scores."}
               </div>
             ) : (
-              candidates.map(({
+              visibleCandidates.map(({
                 resume, job,
-                totalScore, skillScore, experienceScore, educationScore, completenessScore,
-                matchedSkills, missingSkills, breakdown, hasAiScore,
+                totalScore, skillScore, experienceScore, educationScore, profileScore,
+                matchedSkills, missingSkills, breakdown, hasAiScore, aiRecommendedStatus, statusSource,
               }, idx) => {
                 const candidateName  = resume.parsed_data?.name || resume.original_filename;
                 const applicationJob = job?.title || resume.job_title || "Unmapped role";
-                const experience     = resume.parsed_data?.experience_years ?? 0;
+                const experience     = resume.parsed_data?.experience_years;
                 const education      = resume.parsed_data?.education?.join(", ") || "N/A";
+                const experienceLabel = experience == null ? "Not detected" : `${experience} yrs`;
                 const isFresher      = experience === 0;
 
                 return (
@@ -138,6 +169,11 @@ const Screening = () => {
                               {hasAiScore && (
                                 <Badge variant="outline" className="text-[10px] border-cyan-500/40 text-cyan-400 gap-1">
                                   <Sparkles className="w-3 h-3" /> AI
+                                </Badge>
+                              )}
+                              {aiRecommendedStatus && (
+                                <Badge variant="outline" className="text-[10px] border-success/30 text-success">
+                                  {statusSource === "ai" ? `AI Status: ${aiRecommendedStatus}` : `AI Suggests: ${aiRecommendedStatus}`}
                                 </Badge>
                               )}
                             </div>
@@ -171,7 +207,7 @@ const Screening = () => {
                           </div>
                           <div>
                             <p className="text-muted-foreground">Profile</p>
-                            <p className="text-sm font-bold text-foreground">{completenessScore}%</p>
+                            <p className="text-sm font-bold text-foreground">{profileScore}%</p>
                           </div>
                         </div>
 
@@ -209,7 +245,7 @@ const Screening = () => {
 
                         {/* Experience + Education */}
                         <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-                          <span><Brain className="w-3 h-3 inline mr-1" />Experience: {experience} yrs</span>
+                          <span><Brain className="w-3 h-3 inline mr-1" />Experience: {experienceLabel}</span>
                           <span>Education: {education}</span>
                         </div>
 
